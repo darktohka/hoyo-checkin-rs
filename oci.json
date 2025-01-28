@@ -1,0 +1,41 @@
+{
+  "name": "darktohka/hoyo-checkin-rs",
+  "tags": ["latest"],
+  "config": {
+    "entrypoint": ["/hoyo-checkin-rs"],
+    "workingDir": "/"
+  },
+  "platforms": [
+    {
+      "architecture": "amd64",
+      "layers": [
+        {
+          "type": "dir",
+          "source": "./binary-x86_64",
+          "comment": "https://github.com/darktohka/hoyo-checkin-rs"
+        }
+      ]
+    },
+    {
+      "architecture": "arm64",
+      "layers": [
+        {
+          "type": "dir",
+          "source": "./binary-aarch64",
+          "comment": "https://github.com/darktohka/hoyo-checkin-rs"
+        }
+      ]
+    },
+    {
+      "architecture": "arm",
+      "variant": "v7",
+      "layers": [
+        {
+          "type": "dir",
+          "source": "./binary-armv7",
+          "comment": "https://github.com/darktohka/hoyo-checkin-rs"
+        }
+      ]
+    }
+  ]
+}
