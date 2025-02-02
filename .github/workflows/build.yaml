@@ -18,12 +18,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Build the binary for x86_64
-        run: ~/.cargo/bin/cross build --profile release-lto --target x86_64-unknown-linux-musl
+        run: RUSTFLAGS="-C target-feature=+crt-static" ~/.cargo/bin/cross build --profile release-lto --target x86_64-unknown-linux-gnu
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: binary-x86_64
-          path: target/x86_64-unknown-linux-musl/release-lto/hoyo-checkin-rs
+          path: target/x86_64-unknown-linux-gnu/release-lto/hoyo-checkin-rs
 
   build-arm64:
     runs-on: ubuntu-latest
@@ -35,12 +35,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Build the binary for arm64
-        run: ~/.cargo/bin/cross build --profile release-lto --target aarch64-unknown-linux-musl
+        run: RUSTFLAGS="-C target-feature=+crt-static" ~/.cargo/bin/cross build --profile release-lto --target aarch64-unknown-linux-gnu
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: binary-aarch64
-          path: target/aarch64-unknown-linux-musl/release-lto/hoyo-checkin-rs
+          path: target/aarch64-unknown-linux-gnu/release-lto/hoyo-checkin-rs
 
   build-armv7:
     runs-on: ubuntu-latest
@@ -52,12 +52,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Build the binary for armv7
-        run: ~/.cargo/bin/cross build --profile release-lto --target armv7-unknown-linux-musleabihf
+        run: RUSTFLAGS="-C target-feature=+crt-static" ~/.cargo/bin/cross build --profile release-lto --target armv7-unknown-linux-gnueabihf
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: binary-armv7
-          path: target/armv7-unknown-linux-musleabihf/release-lto/hoyo-checkin-rs
+          path: target/armv7-unknown-linux-gnueabihf/release-lto/hoyo-checkin-rs
 
   build-image:
     runs-on: ubuntu-latest
