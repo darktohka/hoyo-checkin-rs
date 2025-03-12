@@ -5,40 +5,36 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs};
 
-const GAME_NAMES: &[(&str, &str)] = &[
-    ("genshin", "Genshin Impact"),
-    ("starrail", "Honkai Star Rail"),
-    ("zenless", "Zenless Zone Zero"),
-];
+pub struct Game<'a> {
+    name: &'a str,
+    act_id: &'a str,
+    url_get_status: &'a str,
+    url_sign: &'a str,
+    rpc_sign_game: Option<&'a str>,
+}
 
-const ACT_ID: &[(&str, &str)] = &[
-    ("genshin", "e202102251931481"),
-    ("starrail", "e202303301540311"),
-    ("zenless", "e202406031448091"),
-];
-
-const URL_GET_STATUS: &[(&str, &str)] = &[
-    ("genshin", "https://sg-hk4e-api.hoyolab.com/event/sol/info"),
-    (
-        "starrail",
-        "https://sg-public-api.hoyolab.com/event/luna/os/info",
-    ),
-    (
-        "zenless",
-        "https://sg-public-api.hoyolab.com/event/luna/zzz/os/info",
-    ),
-];
-
-const URL_SIGN: &[(&str, &str)] = &[
-    ("genshin", "https://sg-hk4e-api.hoyolab.com/event/sol/sign"),
-    (
-        "starrail",
-        "https://sg-public-api.hoyolab.com/event/luna/os/sign",
-    ),
-    (
-        "zenless",
-        "https://sg-public-api.hoyolab.com/event/luna/zzz/os/sign",
-    ),
+const GAMES: &[Game] = &[
+    Game {
+        name: "Genshin Impact",
+        act_id: "e202102251931481",
+        url_get_status: "https://sg-hk4e-api.hoyolab.com/event/sol/info",
+        url_sign: "https://sg-hk4e-api.hoyolab.com/event/sol/sign",
+        rpc_sign_game: None,
+    },
+    Game {
+        name: "Honkai Star Rail",
+        act_id: "e202303301540311",
+        url_get_status: "https://sg-public-api.hoyolab.com/event/luna/os/info",
+        url_sign: "https://sg-public-api.hoyolab.com/event/luna/os/sign",
+        rpc_sign_game: None,
+    },
+    Game {
+        name: "Zenless Zone Zero",
+        act_id: "e202406031448091",
+        url_get_status: "https://sg-public-api.hoyolab.com/event/luna/zzz/os/info",
+        url_sign: "https://sg-public-api.hoyolab.com/event/luna/zzz/os/sign",
+        rpc_sign_game: Some("zzz"),
+    },
 ];
 
 #[derive(Deserialize)]
@@ -73,21 +69,23 @@ pub struct SignResponse {
 struct HoyolabCheckin<'a> {
     account: &'a Account,
     client: &'a Client,
+    games: &'a [Game<'a>],
 }
 
 impl<'a> HoyolabCheckin<'a> {
-    fn new(account: &'a Account, client: &'a Client) -> Self {
-        Self { account, client }
+    fn new(account: &'a Account, client: &'a Client, games: &'a [Game]) -> Self {
+        Self {
+            account,
+            client,
+            games,
+        }
     }
 
-    fn get_status(&self, game: &str) -> Result<bool, String> {
-        let act_id = ACT_ID.iter().find(|&&(g, _)| g == game).unwrap().1;
-        let url = URL_GET_STATUS.iter().find(|&&(g, _)| g == game).unwrap().1;
-
+    fn get_status(&self, game: &Game) -> Result<bool, String> {
         let request = self
             .client
-            .get(url)
-            .query(&[("lang", "en-us"), ("act_id", act_id)])
+            .get(game.url_get_status)
+            .query(&[("lang", "en-us"), ("act_id", &game.act_id)])
             .headers(self.build_headers(game));
         let response: SignResponse = request
             .send()
@@ -108,18 +106,15 @@ impl<'a> HoyolabCheckin<'a> {
             .map_or(false, |data| data.is_sign.unwrap_or(false)))
     }
 
-    fn sign(&self, game: &str) -> Result<(), String> {
-        let act_id = ACT_ID.iter().find(|&&(g, _)| g == game).unwrap().1;
-        let url = URL_SIGN.iter().find(|&&(g, _)| g == game).unwrap().1;
-
+    fn sign(&self, game: &Game) -> Result<(), String> {
         let data = serde_json::to_string(&SignRequest {
-            act_id: act_id.to_string(),
+            act_id: game.act_id.to_string(),
         })
         .map_err(|e| e.to_string())?;
 
         let request = self
             .client
-            .post(url)
+            .post(game.url_sign)
             .query(&[("lang", "en-us")])
             .headers(self.build_headers(game))
             .body(data);
@@ -145,15 +140,13 @@ impl<'a> HoyolabCheckin<'a> {
         Ok(())
     }
 
-    fn process_game(&self, game: &str) -> bool {
-        let name = GAME_NAMES.iter().find(|&&(g, _)| g == game).unwrap().1;
-
+    fn process_game(&self, game: &Game) -> bool {
         match self.get_status(game) {
             Ok(false) => {
                 if let Err(e) = self.sign(game) {
                     println!(
                         "Failed to sign in for {} on {}: {}",
-                        self.account.name, name, e
+                        self.account.name, game.name, e
                     );
                     return false;
                 }
@@ -161,33 +154,42 @@ impl<'a> HoyolabCheckin<'a> {
                 if let Ok(true) = self.get_status(game) {
                     println!(
                         "Daily check-in successful for {} on {}!",
-                        self.account.name, name
+                        self.account.name, game.name
                     );
                     return true;
                 }
 
                 println!(
                     "ERROR: Unable to claim check-in rewards for {} on {}",
-                    self.account.name, name
+                    self.account.name, game.name
                 );
             }
             Ok(true) => println!(
                 "Daily check-in already done for {} on {}!",
-                self.account.name, name
+                self.account.name, game.name
             ),
             Err(e) => println!(
                 "Failed check-in for {} on {}: {}",
-                self.account.name, name, e
+                self.account.name, game.name, e
             ),
         }
+
         false
     }
 
     fn process(&self) -> bool {
-        GAME_NAMES.iter().all(|&(game, _)| self.process_game(game))
+        let mut success = true;
+
+        for game in self.games {
+            if !self.process_game(game) {
+                success = false;
+            }
+        }
+
+        success
     }
 
-    fn build_headers(&self, game: &str) -> HeaderMap {
+    fn build_headers(&self, game: &Game) -> HeaderMap {
         let mut headers = HeaderMap::new();
 
         headers.insert(
@@ -214,8 +216,12 @@ impl<'a> HoyolabCheckin<'a> {
         headers.insert("x-rpc-app_version", HeaderValue::from_static("2.34.1"));
         headers.insert("x-rpc-client_type", HeaderValue::from_static("4"));
 
-        if game == "zenless" {
-            headers.insert("x-rpc-signgame", HeaderValue::from_static("zzz"));
+        if let Some(rpc_sign_game) = &game.rpc_sign_game {
+            headers.insert(
+                "x-rpc-signgame",
+                HeaderValue::from_str(rpc_sign_game)
+                    .expect("Failed to build x-rpc-signgame header"),
+            );
         }
 
         headers.insert(
@@ -241,11 +247,10 @@ fn main() {
     let config: Config = serde_json::from_str(&data).expect("Invalid JSON");
 
     let mut success = true;
-
     let client = Client::new();
 
     for account in config.accounts {
-        let checkin = HoyolabCheckin::new(&account, &client);
+        let checkin = HoyolabCheckin::new(&account, &client, GAMES);
 
         if !checkin.process() {
             success = false;
