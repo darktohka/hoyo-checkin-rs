@@ -1,4 +1,8 @@
-use reqwest::{blocking::Client, header::HeaderMap};
+use reqwest::{
+    blocking::Client,
+    header::{HeaderMap, HeaderValue},
+};
+use serde::Deserialize;
 use serde_json::Value;
 use std::{collections::HashMap, fs};
 
@@ -22,7 +26,7 @@ const URL_GET_STATUS: &[(&str, &str)] = &[
     ),
     (
         "zenless",
-        "https://sg-act-nap-api.hoyolab.com/event/luna/zzz/os/info",
+        "https://sg-public-api.hoyolab.com/event/luna/zzz/os/info",
     ),
 ];
 
@@ -34,21 +38,31 @@ const URL_SIGN: &[(&str, &str)] = &[
     ),
     (
         "zenless",
-        "https://sg-act-nap-api.hoyolab.com/event/luna/zzz/os/sign",
+        "https://sg-public-api.hoyolab.com/event/luna/zzz/os/sign",
     ),
 ];
 
-struct HoyolabCheckin {
+#[derive(Deserialize)]
+pub struct Config {
+    accounts: Vec<Account>,
+    healthcheck: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct Account {
     name: String,
     cookies: HashMap<String, String>,
+}
+
+struct HoyolabCheckin<'a> {
+    account: &'a Account,
     client: Client,
 }
 
-impl HoyolabCheckin {
-    fn new(name: &str, cookies: HashMap<String, String>) -> Self {
+impl<'a> HoyolabCheckin<'a> {
+    fn new(account: &'a Account) -> Self {
         Self {
-            name: name.to_string(),
-            cookies,
+            account,
             client: Client::new(),
         }
     }
@@ -64,7 +78,8 @@ impl HoyolabCheckin {
             .headers(self.build_headers(game))
             .header(
                 "Cookie",
-                self.cookies
+                self.account
+                    .cookies
                     .iter()
                     .map(|(k, v)| format!("{}={}", k, v))
                     .collect::<Vec<_>>()
@@ -118,22 +133,34 @@ impl HoyolabCheckin {
         match self.get_status(game) {
             Ok(false) => {
                 if let Err(e) = self.sign(game) {
-                    println!("Failed to sign in for {} on {}: {}", self.name, name, e);
+                    println!(
+                        "Failed to sign in for {} on {}: {}",
+                        self.account.name, name, e
+                    );
                     return false;
                 }
 
                 if let Ok(true) = self.get_status(game) {
-                    println!("Daily check-in successful for {} on {}!", self.name, name);
+                    println!(
+                        "Daily check-in successful for {} on {}!",
+                        self.account.name, name
+                    );
                     return true;
                 }
 
                 println!(
                     "ERROR: Unable to claim check-in rewards for {} on {}",
-                    self.name, name
+                    self.account.name, name
                 );
             }
-            Ok(true) => println!("Daily check-in already done for {} on {}!", self.name, name),
-            Err(e) => println!("Failed check-in for {} on {}: {}", self.name, name, e),
+            Ok(true) => println!(
+                "Daily check-in already done for {} on {}!",
+                self.account.name, name
+            ),
+            Err(e) => println!(
+                "Failed check-in for {} on {}: {}",
+                self.account.name, name, e
+            ),
         }
         false
     }
@@ -144,54 +171,59 @@ impl HoyolabCheckin {
 
     fn build_headers(&self, game: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        let act_id = ACT_ID.iter().find(|&&(g, _)| g == game).unwrap().1;
 
         headers.insert(
             "Accept",
-            "application/json, text/plain, */*".parse().unwrap(),
+            HeaderValue::from_static("application/json, text/plain, */*"),
         );
-        headers.insert("Accept-Language", "en-US,en;q=0.5".parse().unwrap());
+        headers.insert(
+            "Accept-Language",
+            HeaderValue::from_static("en-US,en;q=0.5"),
+        );
         headers.insert(
             "Origin",
-            "https://webstatic-sea.mihoyo.com".parse().unwrap(),
+            HeaderValue::from_static("https://act.hoyolab.com"),
         );
         headers.insert(
             "Referer",
-            format!("https://webstatic-sea.mihoyo.com/ys/event/signin-sea/index.html?act_id={}&lang=en-us", act_id).parse().unwrap(),
+            HeaderValue::from_static("https://act.hoyolab.com"),
         );
         headers.insert(
             "Content-Type",
-            "application/json;charset=utf-8".parse().unwrap(),
+            HeaderValue::from_static("application/json;charset=utf-8"),
         );
-        headers.insert("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36".parse().unwrap());
+        headers.insert("User-Agent", HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"));
+        headers.insert("x-rpc-app_version", HeaderValue::from_static("2.34.1"));
+        headers.insert("x-rpc-client_type", HeaderValue::from_static("4"));
+
+        if game == "zenless" {
+            headers.insert("x-rpc-signgame", HeaderValue::from_static("zzz"));
+        }
+
         headers
     }
 }
 
 fn main() {
-    let config = fs::read_to_string("config.json").expect("Failed to read config.json");
-    let data: Value = serde_json::from_str(&config).expect("Invalid JSON");
+    let data = fs::read_to_string("config.json").expect("Failed to read config.json");
+    let config: Config = serde_json::from_str(&data).expect("Invalid JSON");
 
     let mut success = true;
 
-    if let Some(accounts) = data["accounts"].as_array() {
-        for account in accounts {
-            let name = account["name"].as_str().unwrap_or("").to_string();
-            let cookies: HashMap<String, String> =
-                serde_json::from_value(account["cookies"].clone()).unwrap();
-            let checkin = HoyolabCheckin::new(&name, cookies);
-            if !checkin.process() {
-                success = false;
-            }
+    for account in config.accounts {
+        let checkin = HoyolabCheckin::new(&account);
+        if !checkin.process() {
+            success = false;
         }
     }
 
-    if let Some(healthcheck) = data["healthcheck"].as_str() {
+    if let Some(healthcheck) = config.healthcheck {
         let url = if !success {
             format!("{}/fail", healthcheck)
         } else {
             healthcheck.to_string()
         };
+
         let _ = Client::new().get(&url).send();
     }
 }
