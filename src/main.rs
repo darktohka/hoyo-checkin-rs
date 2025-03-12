@@ -2,8 +2,7 @@ use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderValue},
 };
-use serde::Deserialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs};
 
 const GAME_NAMES: &[(&str, &str)] = &[
@@ -54,17 +53,31 @@ pub struct Account {
     cookies: HashMap<String, String>,
 }
 
+#[derive(Serialize)]
+pub struct SignRequest {
+    act_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct SignData {
+    is_sign: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct SignResponse {
+    retcode: Option<i32>,
+    message: Option<String>,
+    data: Option<SignData>,
+}
+
 struct HoyolabCheckin<'a> {
     account: &'a Account,
-    client: Client,
+    client: &'a Client,
 }
 
 impl<'a> HoyolabCheckin<'a> {
-    fn new(account: &'a Account) -> Self {
-        Self {
-            account,
-            client: Client::new(),
-        }
+    fn new(account: &'a Account, client: &'a Client) -> Self {
+        Self { account, client }
     }
 
     fn get_status(&self, game: &str) -> Result<bool, String> {
@@ -75,53 +88,58 @@ impl<'a> HoyolabCheckin<'a> {
             .client
             .get(url)
             .query(&[("lang", "en-us"), ("act_id", act_id)])
-            .headers(self.build_headers(game))
-            .header(
-                "Cookie",
-                self.account
-                    .cookies
-                    .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            );
-        let response: Value = request
+            .headers(self.build_headers(game));
+        let response: SignResponse = request
             .send()
             .map_err(|e| e.to_string())?
             .json()
             .map_err(|e| e.to_string())?;
 
-        if let Some(message) = response.get("message") {
-            if response.get("retcode").unwrap_or(&Value::from(0)) != &Value::from(0) {
-                return Err(message.to_string());
-            }
+        let return_code = response.retcode.unwrap_or(0);
+
+        if return_code != 0 {
+            return Err(response
+                .message
+                .unwrap_or_else(|| format!("Return code is {}", return_code).to_string()));
         }
 
-        Ok(response["data"]["is_sign"].as_bool().unwrap_or(false))
+        Ok(response
+            .data
+            .map_or(false, |data| data.is_sign.unwrap_or(false)))
     }
 
     fn sign(&self, game: &str) -> Result<(), String> {
         let act_id = ACT_ID.iter().find(|&&(g, _)| g == game).unwrap().1;
         let url = URL_SIGN.iter().find(|&&(g, _)| g == game).unwrap().1;
 
-        let data = serde_json::json!({ "act_id": act_id });
+        let data = serde_json::to_string(&SignRequest {
+            act_id: act_id.to_string(),
+        })
+        .map_err(|e| e.to_string())?;
 
         let request = self
             .client
             .post(url)
             .query(&[("lang", "en-us")])
             .headers(self.build_headers(game))
-            .json(&data);
-        let response: Value = request
+            .body(data);
+        let response: SignResponse = request
             .send()
             .map_err(|e| e.to_string())?
             .json()
             .map_err(|e| e.to_string())?;
 
-        if let Some(message) = response.get("message") {
-            if response.get("retcode").unwrap_or(&Value::from(0)) != &Value::from(0) {
-                return Err(message.to_string());
-            }
+        let return_code = response.retcode.unwrap_or(0);
+
+        if return_code == -5003 {
+            // Traveler, you've already checked in today~
+            return Ok(());
+        }
+
+        if return_code != 0 {
+            return Err(response
+                .message
+                .unwrap_or_else(|| format!("Return code is {}", return_code).to_string()));
         }
 
         Ok(())
@@ -200,6 +218,20 @@ impl<'a> HoyolabCheckin<'a> {
             headers.insert("x-rpc-signgame", HeaderValue::from_static("zzz"));
         }
 
+        headers.insert(
+            "Cookie",
+            HeaderValue::from_str(
+                &self
+                    .account
+                    .cookies
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+            .expect("Failed to build cookie header"),
+        );
+
         headers
     }
 }
@@ -210,8 +242,11 @@ fn main() {
 
     let mut success = true;
 
+    let client = Client::new();
+
     for account in config.accounts {
-        let checkin = HoyolabCheckin::new(&account);
+        let checkin = HoyolabCheckin::new(&account, &client);
+
         if !checkin.process() {
             success = false;
         }
@@ -224,6 +259,6 @@ fn main() {
             healthcheck.to_string()
         };
 
-        let _ = Client::new().get(&url).send();
+        let _ = client.get(&url).send();
     }
 }
